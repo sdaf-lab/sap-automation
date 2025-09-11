@@ -3,11 +3,11 @@
 SAP Hosts Filter
 
 This Ansible filter plugin generates /etc/hosts entries for SAP systems deployed on Azure
-using the SDAF (SAP Deployment Automation Framework) pattern. It replaces the existing
-Jinja template with a Python implementation that handles the SAP scenarios
+using the SDAF (SAP Deployment Automation Framework). It replaces the existing
+Jinja template with a Python implementation that handles all SAP scenarios
 including scale-up, scale-out, HA, and custom virtual hostname configurations.
 
-Author: SAP Infrastructure Team
+Author: SDAF Core Dev team
 Context: Azure SDAF SAP deployments
 Integration: Called from within 2.4-hosts-file role
 """
@@ -475,7 +475,7 @@ class FilterModule:
         return results
 
 
-# Deployment stage validation functions for operational awareness
+# Deployment stage validation functions for operational troubleshooting
 def validate_deployment_stage(
     ansible_vars: Dict[str, Any], stage: str = "pre_cluster"
 ) -> Dict[str, Any]:
