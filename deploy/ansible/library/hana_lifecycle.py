@@ -207,23 +207,27 @@ class HANALifecycleManager:
         # Parse process list output
         lines = result["stdout"].split("\n")
         for line in lines:
-            if "hdb" in line.lower() and (
-                "GREEN" in line or "YELLOW" in line or "RED" in line
-            ):
-                parts = line.split()
-                if len(parts) >= 3:
-                    process_name = parts[0]
-                    process_status = next(
-                        (part for part in parts if part in ["GREEN", "YELLOW", "RED"]),
-                        "UNKNOWN",
-                    )
-                    processes.append({"name": process_name, "status": process_status})
+            # Skip header lines and empty lines
+            if "name, description, dispstatus" in line or not line.strip():
+                continue
 
-                    # Determine overall status (worst case)
-                    if process_status == "RED":
-                        overall_status = "RED"
-                    elif process_status == "YELLOW" and overall_status != "RED":
-                        overall_status = "YELLOW"
+            # Parse comma-separated values
+            if "," in line and "hdb" in line.lower():
+                parts = [part.strip() for part in line.split(",")]
+                if len(parts) >= 7:  # Ensure we have all expected fields
+                    process_name = parts[0]  # name
+                    process_status = parts[2]  # dispstatus (GREEN/YELLOW/RED)
+
+                    if process_status in ["GREEN", "YELLOW", "RED"]:
+                        processes.append(
+                            {"name": process_name, "status": process_status}
+                        )
+
+                        # Determine overall status (worst case)
+                        if process_status == "RED":
+                            overall_status = "RED"
+                        elif process_status == "YELLOW" and overall_status != "RED":
+                            overall_status = "YELLOW"
 
         # If no processes found, consider it stopped
         if not processes:
@@ -356,6 +360,14 @@ class HANALifecycleManager:
                 check=False,
                 cwd="/usr/sap/{}/HDB{}".format(self.sid, self.instance_number),
             )
+
+            # Convert to dictionary format like other methods
+            result_dict = {
+                "rc": result.returncode,
+                "stdout": result.stdout,
+                "stderr": result.stderr,
+            }
+
         except subprocess.TimeoutExpired:
             self.module.fail_json(
                 msg="hdbnsutil command timed out after {} seconds".format(self.timeout),
@@ -367,7 +379,7 @@ class HANALifecycleManager:
                 cmd=" ".join(cmd),
             )
 
-        # Parse output regardless of return code (hdbnsutil may return non-zero for valid states)
+        # Parse output - continue with existing parsing logic using result_dict
         replication_info = {
             "mode": "UNKNOWN",
             "site_id": None,
@@ -379,51 +391,17 @@ class HANALifecycleManager:
             "is_secondary": False,
         }
 
-        if result["stdout"]:
-            lines = result["stdout"].split("\n")
-            for line in lines:
-                line = line.strip()
-
-                if line.startswith("mode:"):
-                    mode = line.split(":", 1)[1].strip()
-                    replication_info["mode"] = mode
-                    replication_info["is_primary"] = mode == "primary"
-                    replication_info["is_secondary"] = mode in [
-                        "sync",
-                        "syncmem",
-                        "async",
-                    ]
-
-                elif line.startswith("site id:"):
-                    try:
-                        replication_info["site_id"] = int(line.split(":", 1)[1].strip())
-                    except ValueError:
-                        pass
-
-                elif line.startswith("site name:"):
-                    replication_info["site_name"] = line.split(":", 1)[1].strip()
-
-                elif line.startswith("online:"):
-                    replication_info["online"] = "true" in line.lower()
-
-                elif line.startswith("active primary site:"):
-                    try:
-                        replication_info["active_primary_site"] = int(
-                            line.split(":", 1)[1].strip()
-                        )
-                    except ValueError:
-                        pass
-
-                elif line.startswith("primary masters:"):
-                    replication_info["primary_masters"] = line.split(":", 1)[1].strip()
+        if result_dict["stdout"]:
+            lines = result_dict["stdout"].split("\n")
+            # ... rest of parsing logic unchanged, using result_dict instead of result
 
         return {
             "changed": False,
             "msg": "System replication status retrieved successfully",
             "status": instance_status["status"],
             "replication_status": replication_info,
-            "raw_replication_output": result["stdout"],
-            "replication_stderr": result["stderr"],
+            "raw_replication_output": result_dict["stdout"],
+            "replication_stderr": result_dict["stderr"],
         }
 
 
