@@ -52,39 +52,7 @@
 #
 - name:                                "2.4 Hosts: - Generate SAP hosts entries using Python filter"
   ansible.builtin.set_fact:
-    sap_hosts_content:                 "{{ ansible_vars | sdaf_generate_sap_hosts }}"
-  vars:
-    ansible_vars:
-      ansible_play_hosts:              "{{ ansible_play_hosts }}"
-      hostvars:                        "{{ hostvars }}"
-      sap_sid:                         "{{ sap_sid }}"
-      sap_fqdn:                        "{{ sap_fqdn }}"
-      db_sid:                          "{{ db_sid }}"
-
-      # Database configuration
-      database_scale_out:              "{{ database_scale_out | default(false) }}"
-      database_high_availability:      "{{ database_high_availability | default(false) }}"
-      db_instance_number:              "{{ db_instance_number | default('00') }}"
-      database_loadbalancer_ip:        "{{ database_loadbalancer_ip | default('') }}"
-
-      # SCS/ERS configuration
-      scs_high_availability:           "{{ scs_high_availability | default(false) }}"
-      scs_instance_number:             "{{ scs_instance_number | default('00') }}"
-      ers_instance_number:             "{{ ers_instance_number | default('01') }}"
-      scs_lb_ip:                       "{{ scs_lb_ip | default('') }}"
-      ers_lb_ip:                       "{{ ers_lb_ip | default('') }}"
-
-      # Network configuration
-      subnet_cidr_db:                  "{{ subnet_cidr_db | default('') }}"
-      subnet_cidr_storage:             "{{ subnet_cidr_storage | default('') }}"
-
-      # Custom virtual hostname overrides
-      custom_scs_virtual_hostname:     "{{ custom_scs_virtual_hostname | default('') }}"
-      custom_ers_virtual_hostname:     "{{ custom_ers_virtual_hostname | default('') }}"
-      custom_db_virtual_hostname:      "{{ custom_db_virtual_hostname | default('') }}"
-      custom_pas_virtual_hostname:     "{{ custom_pas_virtual_hostname | default('') }}"
-      custom_app_virtual_hostname:     "{{ custom_app_virtual_hostname | default('') }}"
-      custom_web_virtual_hostname:     "{{ custom_web_virtual_hostname | default('') }}"
+    sap_hosts_content:                 "{{ vars | sdaf_generate_sap_hosts }}"
 
 - name:                                "2.4 Hosts: - Update /etc/hosts with all SAP entries"
   ansible.builtin.copy:
