@@ -113,6 +113,7 @@ import subprocess
 import time
 import re
 import os
+import socket
 from ansible.module_utils.basic import AnsibleModule
 
 
@@ -123,6 +124,7 @@ class HANALifecycleManager:
         self.instance_number = module.params["instance_number"]
         self.timeout = module.params["timeout"]
         self.sapcontrol_path = module.params["sapcontrol_path"]
+        self.virtual_host = module.params.get("virtual_host", socket.gethostname())
 
         # Validate sapcontrol path during initialization
         self._validate_sapcontrol_path()
@@ -344,11 +346,40 @@ class HANALifecycleManager:
                 "replication_status": None,
             }
 
-        # Execute hdbnsutil -sr_state directly
+        # Execute hdbnsutil with proper HANA environment
         cmd = [
             "/usr/sap/{}/HDB{}/exe/hdbnsutil".format(self.sid, self.instance_number),
             "-sr_state",
         ]
+
+        # Set up HANA environment variables
+        hana_env = {
+            "HOME": "/usr/sap/{}/home".format(self.sid.lower()),
+            "DIR_EXECUTABLE": "/usr/sap/{}/HDB{}/exe".format(
+                self.sid, self.instance_number
+            ),
+            "DIR_INSTANCE": "/usr/sap/{}/HDB{}".format(self.sid, self.instance_number),
+            "SAPSYSTEMNAME": self.sid,
+            "SAP_RETRIEVAL_PATH": "/usr/sap/{}/HDB{}/{}".format(
+                self.sid, self.instance_number, self.virtual_host
+            ),
+            "SECUDIR": "/usr/sap/{}/HDB{}/{}/sec".format(
+                self.sid, self.instance_number, self.virtual_host
+            ),
+            "LD_LIBRARY_PATH": "/usr/sap/{}/HDB{}/exe".format(
+                self.sid, self.instance_number
+            ),
+            "PATH": "/usr/sap/{}/HDB{}/exe:/usr/local/bin:/usr/bin:/bin".format(
+                self.sid, self.instance_number
+            ),
+        }
+
+        # Initialize result_dict with default values
+        result_dict = {
+            "rc": -1,
+            "stdout": "",
+            "stderr": "",
+        }
 
         try:
             result = subprocess.run(
@@ -359,9 +390,10 @@ class HANALifecycleManager:
                 timeout=self.timeout,
                 check=False,
                 cwd="/usr/sap/{}/HDB{}".format(self.sid, self.instance_number),
+                env=hana_env,
             )
 
-            # Convert to dictionary format like other methods
+            # Convert to dictionary format
             result_dict = {
                 "rc": result.returncode,
                 "stdout": result.stdout,
@@ -393,7 +425,48 @@ class HANALifecycleManager:
 
         if result_dict["stdout"]:
             lines = result_dict["stdout"].split("\n")
-            # ... rest of parsing logic unchanged, using result_dict instead of result
+            for line in lines:
+                line = line.strip()
+
+                if line.startswith("mode:"):
+                    mode = line.split(":", 1)[1].strip()
+                    replication_info["mode"] = mode
+
+                    # Determine replication role based on mode
+                    if mode == "primary":
+                        replication_info["is_primary"] = True
+                        replication_info["is_secondary"] = False
+                    elif mode in ["sync", "syncmem", "async"]:
+                        replication_info["is_primary"] = False
+                        replication_info["is_secondary"] = True
+                    elif mode == "none":
+                        replication_info["mode"] = "DISABLED"
+                        replication_info["is_primary"] = False
+                        replication_info["is_secondary"] = False
+
+                elif line.startswith("site id:"):
+                    try:
+                        replication_info["site_id"] = int(line.split(":", 1)[1].strip())
+                    except (ValueError, IndexError):
+                        pass
+
+                elif line.startswith("site name:"):
+                    replication_info["site_name"] = line.split(":", 1)[1].strip()
+
+                elif line.startswith("online:"):
+                    online_value = line.split(":", 1)[1].strip().lower()
+                    replication_info["online"] = online_value == "true"
+
+                elif line.startswith("active primary site:"):
+                    try:
+                        replication_info["active_primary_site"] = int(
+                            line.split(":", 1)[1].strip()
+                        )
+                    except (ValueError, IndexError):
+                        pass
+
+                elif line.startswith("primary masters:"):
+                    replication_info["primary_masters"] = line.split(":", 1)[1].strip()
 
         return {
             "changed": False,
