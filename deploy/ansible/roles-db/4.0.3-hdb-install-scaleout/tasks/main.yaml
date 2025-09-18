@@ -20,6 +20,11 @@
 ---
 
 # +------------------------------------4--------------------------------------*/
+
+- name:                                "4.0.3 - SAP HANA SCALE OUT: Preparation tasks"
+  ansible.builtin.include_tasks:
+    file:                              "4.0.3.0-scaleout-prep.yaml"
+
 - name:                                "4.0.3 - SAP HANA SCALE OUT: Set BOM facts"
   ansible.builtin.set_fact:
     sap_inifile:                       "hdbserver_{{ virtual_host }}_{{ sap_sid }}_install.rsp"
@@ -61,7 +66,7 @@
 - name:                                "ErrorHandling"
   ansible.builtin.fail:
     msg:                               "INSTALL:0001:Unable to find hdblcm, please check that the installation media is mounted"
-  when: not hdblcm_found.stat.exists
+  when:                                not hdblcm_found.stat.exists
 
 - name:                                "4.0.3 - SAP HANA SCALE OUT: Retrieve Subscription ID and Resource Group Name"
   ansible.builtin.uri:

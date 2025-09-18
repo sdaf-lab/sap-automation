@@ -489,20 +489,22 @@
       block:
         - name:                        "Database Installation Playbook: - HANA ScaleOut - Setting the facts"
           ansible.builtin.set_fact:
-            tier:                      ha
-            main_password:             "{{ hostvars.localhost.sap_password }}"
-            password_ha_db_cluster:    "{{ hostvars.localhost.db_cluster_password }}"
-            primary_instance_name:     "{{ ansible_play_hosts_all[0] }}"         # Setting up Primary Instance Name
-            secondary_instance_name:   "{{ ansible_play_hosts_all[1] }}"         # Setting up Secondary Instance Name
+            tier:                       ha
+            main_password:              "{{ hostvars.localhost.sap_password }}"
+            password_ha_db_cluster:     "{{ hostvars.localhost.db_cluster_password }}"
+            # Implicit assumption that first host in inventory is primary and second is secondary
+            # ensure that your naming matches this pattern.
+            primary_instance_name:      "{{ ansible_play_hosts_all[0] }}"         # Setting up Primary Instance Name
+            secondary_instance_name:    "{{ ansible_play_hosts_all[1] }}"         # Setting up Secondary Instance Name
 
-        - name:                        "Database Installation Playbook: - HANA ScaleOut - Setting the facts for fencing"
-          when:
-                                       - database_cluster_type == "AFA"
-                                       - not use_msi_for_clusters
+        - name:                        "Database Installation Playbook: - Setting the facts for fencing"
           ansible.builtin.set_fact:
-            fencing_spn_client_id:     "{{ hostvars.localhost.sap_fencing_spn_client_id }}"
-            fencing_spn_client_pwd:    "{{ hostvars.localhost.sap_fencing_spn_pwd }}"
-            fencing_spn_tenant_id:     "{{ hostvars.localhost.sap_fencing_spn_tenant_id }}"
+            fencing_spn_client_id:      "{{ hostvars.localhost.sap_fencing_spn_client_id }}"
+            fencing_spn_client_pwd:     "{{ hostvars.localhost.sap_fencing_spn_pwd }}"
+            fencing_spn_tenant_id:      "{{ hostvars.localhost.sap_fencing_spn_tenant_id }}"
+          when:
+                                        - database_cluster_type == "AFA" # TODO: enable this for ASD/ISCSI as well
+                                        - not use_msi_for_clusters
 
         - name:                        "Database Installation Playbook: - HANA ScaleOut - Ensure the correct repositories are set"
           ansible.builtin.include_role:
@@ -516,8 +518,7 @@
           tags:
                                        - 1.4-packages
 
-        # Setup the kernel parameters required for pacemaker cluster VMs
-        - name:                        "Database Installation Playbook: - HANA ScaleOut - Ensure the correct kernel parameters are set"
+        - name:                        "Database Installation Playbook: - Ensure the correct kernel parameters are set"
           ansible.builtin.include_role:
             name:                      roles-os/1.9-kernelparameters
           tags:

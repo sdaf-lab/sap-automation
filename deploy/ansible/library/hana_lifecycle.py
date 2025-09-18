@@ -184,6 +184,12 @@ class HANALifecycleManager:
     def get_instance_status(self):
         """Get current status of HANA instance"""
         result = self._run_sapcontrol_command(["-function", "GetProcessList"])
+        if result is None or "rc" not in result:
+            return {
+                "status": "UNKNOWN",
+                "processes": [],
+                "raw_output": "",
+            }
 
         # sapcontrol exit codes: 0=success, 3=all running, 4=all stopped
         if result["rc"] not in [0, 3, 4]:
@@ -256,11 +262,12 @@ class HANALifecycleManager:
         # Start the instance
         result = self._run_sapcontrol_command(["-function", "Start"])
 
-        if result["rc"] not in [0, 3]:
-            self.module.fail_json(
-                msg="Failed to start HANA instance: {}".format(result["stderr"]),
-                stdout=result["stdout"],
-            )
+        if result is not None and "rc" in result:
+            if result["rc"] not in [0, 3]:
+                self.module.fail_json(
+                    msg="Failed to start HANA instance: {}".format(result["stderr"]),
+                    stdout=result["stdout"],
+                )
 
         # Wait for startup and verify
         start_time = time.time()
@@ -304,11 +311,12 @@ class HANALifecycleManager:
         # Stop the instance
         result = self._run_sapcontrol_command(["-function", "Stop"])
 
-        if result["rc"] not in [0, 4]:
-            self.module.fail_json(
-                msg="Failed to stop HANA instance: {}".format(result["stderr"]),
-                stdout=result["stdout"],
-            )
+        if result is not None and "rc" in result:
+            if result["rc"] not in [0, 4]:
+                self.module.fail_json(
+                    msg="Failed to stop HANA instance: {}".format(result["stderr"]),
+                    stdout=result["stdout"],
+                )
 
         # Wait for shutdown and verify
         start_time = time.time()
@@ -498,6 +506,7 @@ def main():
     hana_manager = HANALifecycleManager(module)
 
     operation = module.params["operation"]
+    result = {"changed": False, "msg": "Unknown operation", "status": "UNKNOWN"}
 
     try:
         if operation == "status":
