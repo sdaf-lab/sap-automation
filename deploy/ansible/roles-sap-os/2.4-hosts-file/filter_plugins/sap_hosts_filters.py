@@ -1,23 +1,28 @@
 #!/usr/bin/env python3
 """
-SAP Hosts Filter
+SAP Hosts Filter Plugin for Ansible
 
-This Ansible filter plugin generates /etc/hosts entries for SAP systems deployed on Azure
-using the SDAF (SAP Deployment Automation Framework). It replaces the existing
-Jinja template with a Python implementation that handles all SAP scenarios
-including scale-up, scale-out, HA, and custom virtual hostname configurations.
+This Ansible filter plugin generates /etc/hosts entries for SAP systems
+deployed on Azure using the SDAF (SAP Deployment Automation Framework)
+pattern. It replaces the existing Jinja template with a Python
+implementation that handles all SAP scenarios including scale-up,
+scale-out, HA, network isolation, and custom virtual hostname
+configurations.
 
-Author: SDAF Core Dev team
+Author: SDAF Core Dev Team
 Context: Azure SDAF SAP deployments
 Integration: Called from within 2.4-hosts-file role
 """
 
 import ipaddress
-from typing import Dict, List, Set, Optional, Any, Tuple
+from typing import Dict, List, Optional, Any
 
 
 class FilterModule:
-    """Ansible filter plugin for SAP hosts file generation in Azure SDAF deployments."""
+    """
+    Ansible filter plugin for SAP hosts file generation in Azure SDAF
+    deployments.
+    """
 
     def filters(self):
         return {
@@ -34,11 +39,12 @@ class FilterModule:
             ansible_vars: Dictionary containing all Ansible variables including:
                 - ansible_play_hosts: List of hostnames
                 - hostvars: Dictionary of host variables with 'ipadd' arrays
+                - inventory_hostname: Current host this filter is running on
                 - sap_sid: SAP System ID
                 - sap_fqdn: SAP Fully Qualified Domain Name
                 - Database configuration (scale_out, HA, load balancer IPs)
                 - SCS/ERS configuration (HA, load balancer IPs, instance numbers)
-                - Network configuration (subnet CIDRs)
+                - Network configuration (subnet CIDRs including subnet_cidr_client)
                 - Custom virtual hostname overrides
 
         Returns:
@@ -48,6 +54,12 @@ class FilterModule:
         config = self._extract_sap_configuration(ansible_vars)
         network_config = self._extract_network_configuration(ansible_vars)
 
+        # Determine if current host is a DB VM for filtering logic
+        current_hostname = ansible_vars.get("inventory_hostname", "")
+        current_host_vars = ansible_vars.get("hostvars", {}).get(current_hostname, {})
+        current_host_tiers = current_host_vars.get("supported_tiers", [])
+        is_current_host_db_vm = "hana" in current_host_tiers
+
         # Generate all hosts file sections
         entries = []
 
@@ -55,16 +67,16 @@ class FilterModule:
         entries.extend(self._generate_main_section_header(config, ansible_vars))
         entries.append("")
 
-        # Generate physical host entries
+        # Generate physical host entries with network isolation filtering
         physical_entries = self._generate_physical_host_entries(
-            ansible_vars, config, network_config
+            ansible_vars, config, network_config, is_current_host_db_vm
         )
         entries.extend(physical_entries)
 
         # Add main section footer
         entries.extend(self._generate_main_section_footer(config))
 
-        # Generate virtual hostname sections
+        # Generate virtual hostname sections (always visible to all hosts)
         virtual_sections = self._generate_virtual_hostname_sections(
             ansible_vars, config
         )
@@ -123,6 +135,7 @@ class FilterModule:
         """Extract network configuration from Ansible variables."""
         subnet_db = ansible_vars.get("subnet_cidr_db", "")
         subnet_storage = ansible_vars.get("subnet_cidr_storage", "")
+        subnet_client = ansible_vars.get("subnet_cidr_client", "")
 
         return {
             "subnet_cidr_db": (
@@ -131,6 +144,11 @@ class FilterModule:
             "subnet_cidr_storage": (
                 subnet_storage
                 if subnet_storage and len(subnet_storage.strip()) > 0
+                else None
+            ),
+            "subnet_cidr_client": (
+                subnet_client
+                if subnet_client and len(subnet_client.strip()) > 0
                 else None
             ),
         }
@@ -142,7 +160,19 @@ class FilterModule:
         ansible_play_hosts = ansible_vars.get("ansible_play_hosts", [])
         network_config = self._extract_network_configuration(ansible_vars)
 
-        return [
+        # Determine if network isolation is active
+        current_hostname = ansible_vars.get("inventory_hostname", "")
+        current_host_vars = ansible_vars.get("hostvars", {}).get(current_hostname, {})
+        current_host_tiers = current_host_vars.get("supported_tiers", [])
+        is_current_host_db_vm = "hana" in current_host_tiers
+
+        network_isolation_active = (
+            config["database_scale_out"]
+            and not is_current_host_db_vm
+            and network_config["subnet_cidr_client"] is not None
+        )
+
+        header = [
             f"# BEGIN ANSIBLE MANAGED BLOCK - {config['sap_sid']}",
             f"# SID: {config['sap_sid']}",
             f"# {len(ansible_play_hosts)} Hosts",
@@ -150,7 +180,19 @@ class FilterModule:
             f"# High availability: {config['database_high_availability']}",
             f"# Subnet DB valid: {network_config['subnet_cidr_db'] is not None}",
             f"# Subnet Storage valid: {network_config['subnet_cidr_storage'] is not None}",
+            f"# Subnet Client valid: {network_config['subnet_cidr_client'] is not None}",
         ]
+
+        if network_isolation_active:
+            header.append(
+                f"# Network isolation: Active (Non-DB host view - showing client subnet IPs only)"
+            )
+        elif config["database_scale_out"] and is_current_host_db_vm:
+            header.append(
+                f"# Network isolation: Disabled (DB host view - showing all IPs)"
+            )
+
+        return header
 
     def _generate_main_section_footer(self, config: Dict[str, Any]) -> List[str]:
         """Generate the main section footer."""
@@ -161,8 +203,9 @@ class FilterModule:
         ansible_vars: Dict[str, Any],
         config: Dict[str, Any],
         network_config: Dict[str, Any],
+        is_current_host_db_vm: bool,
     ) -> List[str]:
-        """Generate physical host entries and their associated virtual hostnames."""
+        """Generate physical host entries with network isolation filtering for scale-out."""
         entries = []
         ansible_play_hosts = ansible_vars.get("ansible_play_hosts", [])
         hostvars = ansible_vars.get("hostvars", {})
@@ -173,7 +216,7 @@ class FilterModule:
 
             host_vars = hostvars[hostname]
             host_entries = self._generate_single_host_entries(
-                hostname, host_vars, config, network_config
+                hostname, host_vars, config, network_config, is_current_host_db_vm
             )
             entries.extend(host_entries)
 
@@ -185,8 +228,9 @@ class FilterModule:
         host_vars: Dict[str, Any],
         config: Dict[str, Any],
         network_config: Dict[str, Any],
+        is_current_host_db_vm: bool,
     ) -> List[str]:
-        """Generate all entries for a single host."""
+        """Generate all entries for a single host with network isolation filtering."""
         entries = []
         ip_addresses = host_vars.get("ipadd", [])
 
@@ -198,27 +242,68 @@ class FilterModule:
 
         # Get host tier information
         supported_tiers = host_vars.get("supported_tiers", [])
+        is_target_host_db_vm = "hana" in supported_tiers
 
-        # Primary hostname entry
-        entries.append(
-            self._format_hosts_entry(
-                primary_ip, f"{hostname}.{config['sap_fqdn']}", hostname
+        # Determine if we need to apply network isolation filtering
+        apply_filtering = (
+            not is_current_host_db_vm
+            and is_target_host_db_vm
+            and config["database_scale_out"]
+        )
+
+        if apply_filtering:
+            # For non-DB hosts viewing DB hosts: filter IPs to client subnet only
+            filtered_primary_ip = self._get_client_subnet_ip_or_primary(
+                ip_addresses, network_config, primary_ip
             )
-        )
 
-        # Custom virtual hostname entries (non-HA scenarios)
-        custom_virtual_entries = self._generate_custom_virtual_hostname_entries(
-            hostname, host_vars, config, primary_ip, supported_tiers
-        )
-        entries.extend(custom_virtual_entries)
-
-        # Secondary IP entries for scale-out database scenarios
-        if config["database_scale_out"] and "hana" in supported_tiers:
-            for secondary_ip in secondary_ips:
-                scale_out_entries = self._generate_database_scale_out_entries(
-                    hostname, secondary_ip, config, network_config
+            # Primary hostname entry (using client subnet IP or primary IP)
+            if filtered_primary_ip:
+                entries.append(
+                    self._format_hosts_entry(
+                        filtered_primary_ip,
+                        f"{hostname}.{config['sap_fqdn']}",
+                        hostname,
+                    )
                 )
-                entries.extend(scale_out_entries)
+
+            # Custom virtual hostname entries for non-DB targets
+            custom_virtual_entries = self._generate_custom_virtual_hostname_entries(
+                hostname, host_vars, config, filtered_primary_ip, supported_tiers
+            )
+            entries.extend(custom_virtual_entries)
+
+            # Scale-out entries: only show client subnet IPs
+            for secondary_ip in secondary_ips:
+                if self._is_ip_in_client_subnet(secondary_ip, network_config):
+                    scale_out_entries = self._generate_database_scale_out_entries(
+                        hostname, secondary_ip, config, network_config
+                    )
+                    entries.extend(scale_out_entries)
+
+        else:
+            # Normal processing: show all IPs (DB VMs or non-DB target hosts)
+
+            # Primary hostname entry
+            entries.append(
+                self._format_hosts_entry(
+                    primary_ip, f"{hostname}.{config['sap_fqdn']}", hostname
+                )
+            )
+
+            # Custom virtual hostname entries (non-HA scenarios)
+            custom_virtual_entries = self._generate_custom_virtual_hostname_entries(
+                hostname, host_vars, config, primary_ip, supported_tiers
+            )
+            entries.extend(custom_virtual_entries)
+
+            # Secondary IP entries for scale-out database scenarios
+            if config["database_scale_out"] and is_target_host_db_vm:
+                for secondary_ip in secondary_ips:
+                    scale_out_entries = self._generate_database_scale_out_entries(
+                        hostname, secondary_ip, config, network_config
+                    )
+                    entries.extend(scale_out_entries)
 
         return entries
 
@@ -318,6 +403,57 @@ class FilterModule:
             pass
 
         return None
+
+    def _get_client_subnet_ip_or_primary(
+        self, ip_addresses: List[str], network_config: Dict[str, Any], primary_ip: str
+    ) -> Optional[str]:
+        """
+        Find IP address in client subnet, or return primary IP if none found.
+
+        Args:
+            ip_addresses: List of all IP addresses for the host
+            network_config: Network configuration including subnet_cidr_client
+            primary_ip: Primary (first) IP address as fallback
+
+        Returns:
+            IP address in client subnet, or primary IP if none found
+        """
+        if not network_config["subnet_cidr_client"]:
+            return primary_ip
+
+        try:
+            client_network = ipaddress.ip_network(
+                network_config["subnet_cidr_client"], strict=False
+            )
+
+            # Find first IP that belongs to client subnet
+            for ip_addr in ip_addresses:
+                try:
+                    if ipaddress.ip_address(ip_addr) in client_network:
+                        return ip_addr
+                except ipaddress.AddressValueError:
+                    continue
+
+        except (ipaddress.AddressValueError, ipaddress.NetmaskValueError):
+            pass
+
+        # Fallback to primary IP if no client subnet IP found
+        return primary_ip
+
+    def _is_ip_in_client_subnet(
+        self, ip_address: str, network_config: Dict[str, Any]
+    ) -> bool:
+        """Check if IP address belongs to client subnet."""
+        if not network_config["subnet_cidr_client"]:
+            return False
+
+        try:
+            client_network = ipaddress.ip_network(
+                network_config["subnet_cidr_client"], strict=False
+            )
+            return ipaddress.ip_address(ip_address) in client_network
+        except (ipaddress.AddressValueError, ipaddress.NetmaskValueError):
+            return False
 
     def _generate_virtual_hostname_sections(
         self, ansible_vars: Dict[str, Any], config: Dict[str, Any]
@@ -444,7 +580,11 @@ class FilterModule:
         results = {"valid": True, "warnings": [], "errors": []}
 
         # Validate subnet CIDR formats
-        for subnet_key in ["subnet_cidr_db", "subnet_cidr_storage"]:
+        for subnet_key in [
+            "subnet_cidr_db",
+            "subnet_cidr_storage",
+            "subnet_cidr_client",
+        ]:
             subnet_value = network_config.get(subnet_key)
 
             if subnet_value:
@@ -457,64 +597,26 @@ class FilterModule:
                     results["valid"] = False
 
         # Check for overlapping subnets
-        db_subnet = network_config.get("subnet_cidr_db")
-        storage_subnet = network_config.get("subnet_cidr_storage")
+        subnet_pairs = [
+            ("subnet_cidr_db", "subnet_cidr_storage"),
+            ("subnet_cidr_db", "subnet_cidr_client"),
+            ("subnet_cidr_storage", "subnet_cidr_client"),
+        ]
 
-        if db_subnet and storage_subnet:
-            try:
-                db_net = ipaddress.ip_network(db_subnet, strict=False)
-                storage_net = ipaddress.ip_network(storage_subnet, strict=False)
+        for subnet1_key, subnet2_key in subnet_pairs:
+            subnet1 = network_config.get(subnet1_key)
+            subnet2 = network_config.get(subnet2_key)
 
-                if db_net.overlaps(storage_net):
-                    results["warnings"].append(
-                        f"Database and storage subnets overlap: {db_subnet} and {storage_subnet}"
-                    )
-            except (ipaddress.AddressValueError, ipaddress.NetmaskValueError):
-                pass  # Already handled above
+            if subnet1 and subnet2:
+                try:
+                    net1 = ipaddress.ip_network(subnet1, strict=False)
+                    net2 = ipaddress.ip_network(subnet2, strict=False)
+
+                    if net1.overlaps(net2):
+                        results["warnings"].append(
+                            f"Subnets overlap: {subnet1_key}={subnet1} and {subnet2_key}={subnet2}"
+                        )
+                except (ipaddress.AddressValueError, ipaddress.NetmaskValueError):
+                    pass  # Already handled above
 
         return results
-
-
-# Deployment stage validation functions for operational troubleshooting
-def validate_deployment_stage(
-    ansible_vars: Dict[str, Any], stage: str = "pre_cluster"
-) -> Dict[str, Any]:
-    """
-    Validate SAP configuration for specific deployment stages.
-
-    Args:
-        ansible_vars: Complete Ansible variables
-        stage: 'pre_cluster', 'post_cluster', or 'production'
-
-    Returns:
-        Stage-specific validation results
-    """
-    results = {"valid": True, "warnings": [], "errors": [], "stage": stage}
-
-    config = FilterModule()._extract_sap_configuration(ansible_vars)
-
-    if stage == "pre_cluster":
-        # Pre-cluster: infrastructure ready but cluster not active
-        if config["scs_high_availability"]:
-            if not config["scs_lb_ip"] or not config["ers_lb_ip"]:
-                results["errors"].append(
-                    "SCS HA enabled but load balancer IPs not configured"
-                )
-                results["valid"] = False
-            else:
-                results["warnings"].append(
-                    "Load balancer IPs configured but not yet active (expected at pre-cluster stage)"
-                )
-
-        if config["database_high_availability"] and not config["db_lb_ip"]:
-            results["errors"].append(
-                "Database HA enabled but load balancer IP not configured"
-            )
-            results["valid"] = False
-
-    elif stage == "post_cluster":
-        results["warnings"].append(
-            "Post-cluster stage: Load balancer IPs should now be responsive"
-        )
-
-    return results
