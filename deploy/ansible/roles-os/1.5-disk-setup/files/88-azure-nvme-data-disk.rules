@@ -33,7 +33,7 @@ KERNEL=="nvme*[0-9]n*[0-9]p[0-9]", ENV{DEVTYPE}=="partition", ATTR{nsid}=="?*", 
 GOTO="azure_udev_end"
 LABEL="azure_nvme_end"
 
-# SCSI section unchanged...
+# Section 2: SCSI drives - Enhanced for LVM compatibility
 ACTION!="add|change", GOTO="azure_udev_end"
 SUBSYSTEM!="block", GOTO="azure_udev_end"
 ATTRS{ID_VENDOR}=="Msft", ATTRS{ID_MODEL}=="Virtual_Disk", GOTO="azure_scsi_check"
