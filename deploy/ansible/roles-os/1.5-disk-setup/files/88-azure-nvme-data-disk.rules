@@ -1,5 +1,6 @@
 # Azure specific udev rules
 # Uses hardware attributes instead of environment variables for resiliency
+# Uses hardware attributes instead of environment variables for resiliency
 # Uses external azure-nvme-lun-calc script for namespace detection
 
 # Section 1: NVMe drives
@@ -9,7 +10,10 @@ ACTION!="add|change", GOTO="azure_nvme_end"
 SUBSYSTEM!="block", GOTO="azure_nvme_end"
 KERNEL!="nvme*", GOTO="azure_nvme_end"
 
-ATTRS{model}=="MSFT NVMe Accelerator v1.0*", GOTO="azure_nvme_remote_start"
+# Hardware-based device identification (LVM-immune)
+# Uses hardware attributes that cannot be modified by LVM processing
+ATTRS{model}=="MSFT NVMe Accelerator v1.0*", ATTRS{vendor}=="0x1414", GOTO="azure_nvme_remote_start"
+
 GOTO="azure_nvme_end"
 
 LABEL="azure_nvme_remote_start"
@@ -19,12 +23,15 @@ KERNEL=="nvme*[0-9]n*[0-9]", ENV{DEVTYPE}=="disk", ATTR{nsid}=="1", \
 KERNEL=="nvme*[0-9]n*[0-9]p[0-9]", ENV{DEVTYPE}=="partition", ATTR{nsid}=="1", \
     SYMLINK+="disk/azure/root-part%n", GOTO="azure_udev_end"
 
-# Data disks - NSID 2+
+# create SYMLINKs for NVMe data disks (namespace 2+)
+# Hardware-based approach using $attr{nsid} for LUN calculation
 KERNEL=="nvme*[0-9]n*[0-9]", ENV{DEVTYPE}=="disk", ATTR{nsid}=="?*", ATTR{nsid}!="1", \
     PROGRAM="/usr/local/bin/azure-nvme-lun-calc %k $attr{nsid}", \
     RESULT=="?*", \
     SYMLINK+="disk/azure/data/by-lun/%c", GOTO="azure_udev_end"
 
+# create SYMLINKs for NVMe data disk partitions
+# Hardware-based approach for partitions
 KERNEL=="nvme*[0-9]n*[0-9]p[0-9]", ENV{DEVTYPE}=="partition", ATTR{nsid}=="?*", ATTR{nsid}!="1", \
     PROGRAM="/usr/local/bin/azure-nvme-lun-calc %k $attr{nsid}", \
     RESULT=="?*", \
@@ -36,7 +43,11 @@ LABEL="azure_nvme_end"
 # Section 2: SCSI drives - Enhanced for LVM compatibility
 ACTION!="add|change", GOTO="azure_udev_end"
 SUBSYSTEM!="block", GOTO="azure_udev_end"
+
+# Hardware-based SCSI device identification (LVM-immune)
+# Uses hardware attributes that remain constant regardless of LVM processing
 ATTRS{ID_VENDOR}=="Msft", ATTRS{ID_MODEL}=="Virtual_Disk", GOTO="azure_scsi_check"
+
 GOTO="azure_udev_end"
 
 LABEL="azure_scsi_check"
